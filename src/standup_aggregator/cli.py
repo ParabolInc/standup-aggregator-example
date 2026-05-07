@@ -6,6 +6,8 @@ so each command body stays small and easy to read.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -14,7 +16,13 @@ from rich.table import Table
 from standup_aggregator import __version__
 from standup_aggregator.client import ParabolApiError, ParabolClient
 from standup_aggregator.config import ConfigError, load_config
+from standup_aggregator.discover import (
+    discover_meetings,
+    filter_teams,
+    list_visible_teams,
+)
 from standup_aggregator.queries import VIEWER_QUERY
+from standup_aggregator.timeparse import TimeParseError, parse_window
 
 app = typer.Typer(
     name="standup-aggregator",
@@ -77,3 +85,71 @@ def doctor() -> None:
         for t in teams:
             table.add_row(t.get("id", ""), t.get("name", ""))
         console.print(table)
+
+
+@app.command("list")
+def list_cmd(
+    since: str | None = typer.Option(
+        None,
+        "--since",
+        help="Window start. ISO date, ISO datetime, 'today', 'yesterday', or 'Nd'/'Nw'.",
+    ),
+    until: str | None = typer.Option(
+        None,
+        "--until",
+        help="Window end. Same formats as --since. Defaults to now.",
+    ),
+    teams: list[str] = typer.Option(
+        [],
+        "--team",
+        help="Filter to one or more teams by id or display name. Repeatable.",
+    ),
+) -> None:
+    """List Stand-Ups in the given window without fetching responses."""
+    try:
+        cfg = load_config()
+    except ConfigError as exc:
+        console.print(f"[red bold]Config error:[/] {exc}")
+        raise typer.Exit(code=1)
+
+    try:
+        since_dt, until_dt, desc = parse_window(since, until, now=datetime.now(tz=timezone.utc))
+    except TimeParseError as exc:
+        console.print(f"[red bold]Bad time range:[/] {exc}")
+        raise typer.Exit(code=1)
+
+    console.print(f"[dim]Window:[/] {desc}")
+
+    try:
+        with ParabolClient(cfg) as client:
+            visible_teams = list_visible_teams(client)
+            chosen_teams = filter_teams(visible_teams, teams)
+            if not chosen_teams:
+                console.print("[yellow]No teams matched the filter.[/]")
+                raise typer.Exit(code=0)
+            meetings = discover_meetings(client, chosen_teams, since_dt, until_dt)
+    except ParabolApiError as exc:
+        console.print(f"[red bold]API error:[/] {exc}")
+        raise typer.Exit(code=1)
+
+    if not meetings:
+        console.print("[yellow]No Stand-Ups found in this window.[/]")
+        raise typer.Exit(code=0)
+
+    table = Table(title=f"Stand-Ups ({len(meetings)})", show_header=True, header_style="bold magenta")
+    table.add_column("Team", style="cyan")
+    table.add_column("Name")
+    table.add_column("Created (UTC)", style="dim")
+    table.add_column("Responses", justify="right")
+    table.add_column("ID", style="dim")
+
+    meetings.sort(key=lambda m: m.created_at, reverse=True)
+    for m in meetings:
+        table.add_row(
+            m.team_name,
+            m.name,
+            m.created_at.strftime("%Y-%m-%d %H:%M"),
+            str(m.response_count),
+            m.id,
+        )
+    console.print(table)
