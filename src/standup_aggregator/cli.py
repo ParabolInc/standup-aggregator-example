@@ -28,6 +28,7 @@ from standup_aggregator.fetch import fetch_meeting
 from standup_aggregator.fs import make_run_dir, mint_run_id
 from standup_aggregator.models import MeetingDoc, Reply
 from standup_aggregator.queries import VIEWER_QUERY
+from standup_aggregator.progress import hydration_progress, summary_table
 from standup_aggregator.render import render_index, render_meeting, render_meeting_filename
 from standup_aggregator.timeparse import TimeParseError, parse_window
 
@@ -204,6 +205,13 @@ def _print_meeting(doc: MeetingDoc) -> None:
             console.print(tree)
 
 
+def _count_replies(resp) -> int:
+    """Recursively count all replies under a response (top-level + nested)."""
+    def _walk(rs):
+        return sum(1 + _walk(r.children) for r in rs)
+    return _walk(resp.replies)
+
+
 @app.command()
 def inspect(meeting_id: str = typer.Argument(..., help="The meeting id to hydrate.")) -> None:
     """Hydrate one meeting and pretty-print it to the terminal."""
@@ -265,29 +273,43 @@ def run(
             console.print(f"[green]Found {len(summaries)} meeting(s). Hydrating...[/]")
 
             docs = []
-            for s in summaries:
-                console.print(f"  • {s.team_name} — {s.name} ({s.id})")
-                docs.append(fetch_meeting(client, s.id))
+            with hydration_progress(len(summaries), console) as tracker:
+                for s in summaries:
+                    tracker.advance(f"{s.team_name} — {s.name}")
+                    docs.append(fetch_meeting(client, s.id))
     except ParabolApiError as exc:
         console.print(f"[red bold]API error:[/] {exc}")
         raise typer.Exit(code=1)
 
     run_id = mint_run_id(datetime.now(tz=timezone.utc))
+    out_dir = None
+    rendered: list[tuple] = []
+
     if dry_run:
         console.print(f"[cyan]--dry-run:[/] would have written {len(docs)} file(s) to out/{run_id}/")
         for doc in docs:
             console.print(f"  • {render_meeting_filename(doc)}")
-        return
+    else:
+        try:
+            out_dir = make_run_dir(run_id)
+            for doc in docs:
+                filename = render_meeting_filename(doc)
+                (out_dir / filename).write_text(render_meeting(doc), encoding="utf-8")
+                rendered.append((doc, filename))
+            (out_dir / "INDEX.md").write_text(render_index(rendered), encoding="utf-8")
+        except OSError as exc:
+            console.print(f"[red bold]File I/O error:[/] {exc}")
+            raise typer.Exit(code=1)
+        console.print(f"[green bold]Wrote {len(rendered)} file(s) + INDEX.md to[/] [cyan]{out_dir}/[/]")
 
-    try:
-        out_dir = make_run_dir(run_id)
-        rendered: list[tuple] = []
-        for doc in docs:
-            filename = render_meeting_filename(doc)
-            (out_dir / filename).write_text(render_meeting(doc), encoding="utf-8")
-            rendered.append((doc, filename))
-        (out_dir / "INDEX.md").write_text(render_index(rendered), encoding="utf-8")
-    except OSError as exc:
-        console.print(f"[red bold]File I/O error:[/] {exc}")
-        raise typer.Exit(code=1)
-    console.print(f"[green bold]Wrote {len(rendered)} file(s) + INDEX.md to[/] [cyan]{out_dir}/[/]")
+    total_responses = sum(len(d.responses) for d in docs)
+    total_replies = sum(_count_replies(r) for d in docs for r in d.responses)
+    console.print(
+        summary_table(
+            teams_scanned=len(chosen_teams),
+            meetings=len(docs),
+            responses=total_responses,
+            replies=total_replies,
+            output_dir=out_dir,
+        )
+    )
