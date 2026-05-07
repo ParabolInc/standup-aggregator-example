@@ -3,6 +3,12 @@ import pytest
 from standup_aggregator.config import Config, ConfigError, load_config
 
 
+@pytest.fixture(autouse=True)
+def _no_dotenv(monkeypatch):
+    """Prevent .env files in the working directory from leaking into tests."""
+    monkeypatch.setattr("standup_aggregator.config.load_dotenv", lambda *a, **kw: False)
+
+
 def test_load_config_returns_config_when_pat_present(monkeypatch):
     monkeypatch.setenv("PARABOL_PAT", "pat_abc123")
     monkeypatch.delenv("PARABOL_BASE_URL", raising=False)

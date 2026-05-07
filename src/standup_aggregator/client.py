@@ -86,7 +86,6 @@ class ParabolClient:
             "Authorization": f"Bearer {self._config.pat}",
         }
 
-        last_exc: Exception | None = None
         for attempt in range(self.MAX_RETRIES + 1):
             try:
                 response = self._http.post(
@@ -95,7 +94,6 @@ class ParabolClient:
                     json=payload,
                 )
             except httpx.RequestError as exc:
-                last_exc = exc
                 if attempt < self.MAX_RETRIES:
                     time.sleep(self.RETRY_BACKOFF_SECONDS * (attempt + 1))
                     continue
@@ -130,13 +128,13 @@ class ParabolClient:
             errors = body.get("errors") or []
             if errors:
                 messages = [e.get("message", "(no message)") for e in errors]
-                # Heuristic: scope-related errors typically mention 'scope' or 'permission'.
+                # Heuristic: scope and unauthorized errors are PAT-level auth problems
+                # we want to surface as AuthError. We deliberately do NOT match on
+                # "permission" because Parabol's resource-level access errors use
+                # that word for valid PATs that just can't see a particular thing.
                 joined = " ".join(messages).lower()
-                if "scope" in joined or "permission" in joined or "unauthorized" in joined:
+                if "scope" in joined or "unauthorized" in joined:
                     raise AuthError("; ".join(messages))
                 raise GraphQLError(messages)
 
             return body.get("data") or {}
-
-        # If we drained the loop without returning, surface the last exception.
-        raise NetworkError(f"Exhausted retries: {last_exc}")
