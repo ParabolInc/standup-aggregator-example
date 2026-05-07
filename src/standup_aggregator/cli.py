@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 from rich.tree import Tree
@@ -160,28 +161,36 @@ def list_cmd(
 
 def _render_replies_tree(replies: list[Reply], parent: Tree) -> None:
     for r in replies:
-        node = parent.add(f"[bold]{r.author_name}[/]: {r.plaintext or '[dim](empty)[/]'}")
+        if r.plaintext:
+            label = f"[bold]{escape(r.author_name)}[/]: {escape(r.plaintext)}"
+        else:
+            label = f"[bold]{escape(r.author_name)}[/]: [dim](empty)[/]"
+        node = parent.add(label)
         if r.children:
             _render_replies_tree(r.children, node)
 
 
 def _print_meeting(doc: MeetingDoc) -> None:
     header = (
-        f"[bold cyan]{doc.name}[/]  ·  [magenta]{doc.team_name}[/]\n"
+        f"[bold cyan]{escape(doc.name)}[/]  ·  [magenta]{escape(doc.team_name)}[/]\n"
         f"[dim]{doc.created_at.strftime('%Y-%m-%d %H:%M UTC')}[/]\n\n"
-        f"[italic]Prompt:[/] {doc.prompt or '(no prompt)'}\n"
+        f"[italic]Prompt:[/] {escape(doc.prompt) if doc.prompt else '(no prompt)'}\n"
         f"[dim]{doc.response_count} response(s)[/]"
     )
     console.print(Panel(header, border_style="cyan"))
 
     for resp in doc.responses:
         rxn = (
-            "  ".join(f"{r.emoji_id}×{r.count}" for r in resp.reactions)
+            "  ".join(f"{escape(r.emoji_id)}×{r.count}" for r in resp.reactions)
             or "[dim]no reactions[/]"
         )
+        if resp.plaintext:
+            plaintext_line = escape(resp.plaintext)
+        else:
+            plaintext_line = "[dim](empty)[/]"
         body = (
-            f"[bold]{resp.author_name}[/]  [dim]{resp.created_at.strftime('%Y-%m-%d %H:%M')}[/]\n\n"
-            f"{resp.plaintext or '[dim](empty)[/]'}\n\n"
+            f"[bold]{escape(resp.author_name)}[/]  [dim]{resp.created_at.strftime('%Y-%m-%d %H:%M')}[/]\n\n"
+            f"{plaintext_line}\n\n"
             f"{rxn}"
         )
         console.print(Panel(body, border_style="green"))

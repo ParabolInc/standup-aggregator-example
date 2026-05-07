@@ -186,6 +186,11 @@ def fetch_meeting(client: ParabolClient, meeting_id: str) -> MeetingDoc:
         if not response_id:
             continue
 
+        response_created = _parse_dt(r.get("createdAt")) or _parse_dt(meeting.get("createdAt"))
+        if response_created is None:
+            # Response without a creation timestamp — unusable. Skip rather than crash.
+            continue
+
         # Fetch thread for this response's discussion, if any.
         discussion = response_to_discussion.get(response_id) or {}
         comment_count = int(discussion.get("commentCount") or 0)
@@ -198,7 +203,7 @@ def fetch_meeting(client: ParabolClient, meeting_id: str) -> MeetingDoc:
                 id=response_id,
                 author_name=user.get("preferredName") or "(unknown)",
                 author_email=user.get("email"),
-                created_at=_parse_dt(r.get("createdAt")) or _parse_dt(meeting.get("createdAt")),
+                created_at=response_created,
                 plaintext=r.get("plaintextContent") or "",
                 reactions=reactions,
                 replies=_build_replies(comment_nodes),
@@ -209,12 +214,18 @@ def fetch_meeting(client: ParabolClient, meeting_id: str) -> MeetingDoc:
     if not meeting_id_value:
         raise ValueError(f"Meeting {meeting_id!r} returned without an id field")
 
+    created_at_value = _parse_dt(meeting.get("createdAt"))
+    if created_at_value is None:
+        raise ValueError(
+            f"Meeting {meeting_id!r} has no createdAt — cannot build a MeetingDoc."
+        )
+
     return MeetingDoc(
         id=meeting_id_value,
         name=meeting.get("name", "Stand-Up"),
         team_id=team.get("id") or meeting.get("teamId", ""),
         team_name=team.get("name") or "(unknown team)",
-        created_at=_parse_dt(meeting.get("createdAt")),
+        created_at=created_at_value,
         ended_at=_parse_dt(meeting.get("endedAt")),
         prompt=meeting.get("meetingPrompt") or "",
         response_count=int(meeting.get("responseCount") or len(responses)),
