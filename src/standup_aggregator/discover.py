@@ -8,15 +8,23 @@ Strategy (confirmed by introspection against live API):
     meetings(first, teamIds, meetingTypes, after, before)
 
   where `before` is a required DateTime, `after` is an optional DateTime
-  cursor (from pageInfo.endCursor of the previous page), and both
-  `teamIds` and `meetingTypes` are required non-null lists.
+  lower-bound date filter, and both `teamIds` and `meetingTypes` are
+  required non-null lists.
 
   DateTime scalars MUST include milliseconds in the format:
   YYYY-MM-DDTHH:MM:SS.SSSZ — the server rejects ISO strings without ms.
 
-  Pagination uses DateTime-based cursors (not opaque relay strings).
-  pageInfo.endCursor is a DateTime string; pass it as `after` on the
-  next call. Stop when pageInfo.hasNextPage is false.
+  Pagination advances the UPPER bound (`before`), not `after`.
+  Parabol returns results newest-first; `after` acts as a fixed
+  lower-bound date filter (not a forward-paging cursor). Setting
+  after=endCursor on the next call would return the same meetings
+  inclusively, doubling every row. Instead, on each subsequent page
+  `before` is advanced to the createdAt of the oldest meeting seen on
+  the previous page, asking the API for strictly older meetings. `after`
+  stays pinned at the user's --since for every call. A seen_ids set
+  defensively dedups in case the API ever returns boundary rows twice.
+  Stop when hasNextPage is false, no new ids are found, or the new
+  `before` would equal the previous one (no progress).
 
   Discovery flow:
   1. Query VIEWER_QUERY for the list of teams visible to the PAT.
@@ -26,8 +34,7 @@ Strategy (confirmed by introspection against live API):
      to the requested teams, so no client-side grouping by teamId is
      needed — but we do need a lookup map to resolve team names.
   4. Filter each page's meetings client-side to the [since, until]
-     window (inclusive on both ends), since the API window is set by
-     the outer [since, until] and the cursor only narrows the `after`.
+     window (inclusive on both ends).
 
   The pure helpers (MeetingSummary, in_window, filter_teams) are
   covered by unit tests in tests/test_discover.py.
@@ -97,8 +104,9 @@ def discover_meetings(
 ) -> list[MeetingSummary]:
     """Walk viewer.meetings and return MeetingSummary records inside [since, until].
 
-    All team IDs are passed in a single query. Pagination uses DateTime-based
-    cursors — endCursor from pageInfo is fed back as `after` on the next call.
+    All team IDs are passed in a single query. Pagination advances the upper
+    bound (`before`) toward older meetings on each page; `after` stays pinned
+    at the user's --since. A seen_ids set defensively dedups boundary rows.
     """
     if not teams:
         return []
@@ -107,28 +115,33 @@ def discover_meetings(
     team_ids = list(team_id_to_name.keys())
 
     results: list[MeetingSummary] = []
-    # On the first page, `after` is the window start (since_str) so the server
-    # filters server-side. On subsequent pages, `after` is the DateTime cursor
-    # returned in pageInfo.endCursor. Using a single `cursor` variable that
-    # starts at since_str unifies both cases and removes the if/else each loop.
-    cursor: str = _to_parabol_dt(since)
+    seen_ids: set[str] = set()
+    after_str = _to_parabol_dt(since)
     before_str = _to_parabol_dt(until)
+    cursor_before: str = before_str  # advances on each page; starts at the user's --until
 
     while True:
         variables: dict = {
             "first": page_size,
             "teamIds": team_ids,
-            "before": before_str,
-            "after": cursor,
+            "after": after_str,
+            "before": cursor_before,
         }
 
         data = client.query(TEAM_MEETINGS_QUERY, variables)
         page = (data.get("viewer") or {}).get("meetings") or {}
         edges = page.get("edges") or []
 
+        page_meetings: list[MeetingSummary] = []
         for edge in edges:
             node = edge.get("node") or {}
             if not node:
+                continue
+            node_id = node.get("id")
+            if not node_id or node_id in seen_ids:
+                # Defensive dedup. Parabol pagination has shown duplicate-row
+                # behavior at boundaries; we drop repeats explicitly so a
+                # single surprising response can't double-count meetings.
                 continue
             created_raw = node.get("createdAt")
             if not created_raw:
@@ -140,10 +153,6 @@ def discover_meetings(
                 if ended_raw
                 else None
             )
-            # Skip nodes without an id — avoids KeyError escaping the API block.
-            node_id = node.get("id")
-            if not node_id:
-                continue
             team_id = node.get("teamId", "")
             team_name = team_id_to_name.get(team_id, team_id)
             m = MeetingSummary(
@@ -155,15 +164,26 @@ def discover_meetings(
                 ended_at=ended_at,
                 response_count=int(node.get("responseCount") or 0),
             )
+            seen_ids.add(node_id)
+            page_meetings.append(m)
             if in_window(m, since, until):
                 results.append(m)
 
+        # Advance the upper bound to the oldest meeting on this page so the next
+        # call asks for older meetings (Parabol returns newest-first, so the last
+        # item in the page is the oldest). pageInfo.endCursor is also acceptable
+        # — we use the oldest item we actually saw to avoid surprises if the API
+        # ever returns endCursor unset on a non-empty page.
         page_info = page.get("pageInfo") or {}
         if not page_info.get("hasNextPage"):
             break
-        new_cursor = page_info.get("endCursor")
-        if not new_cursor or new_cursor == cursor:
+        if not page_meetings:
+            # API said hasNextPage but we got no new ids. Nothing to advance to.
             break
-        cursor = new_cursor
+        oldest_on_page = min(page_meetings, key=lambda m: m.created_at).created_at
+        new_before = _to_parabol_dt(oldest_on_page)
+        if new_before == cursor_before:
+            break
+        cursor_before = new_before
 
     return results

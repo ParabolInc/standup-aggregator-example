@@ -45,9 +45,13 @@ query Viewer {
 #
 # Required scope: MEETINGS_READ.
 #
-# Pagination: DateTime-cursor style. `pageInfo.endCursor` is a DateTime string
-# (YYYY-MM-DDTHH:MM:SS.SSSZ). Pass it as `after` on the next call. Stop when
-# `pageInfo.hasNextPage` is false.
+# Pagination: advance the upper bound (`before`) on each page. Parabol returns
+# results newest-first and treats `after` as a fixed lower-bound date filter —
+# NOT a forward-paging cursor. Passing endCursor back as `after` would return
+# the same meetings inclusively (duplicating every row). Instead, `after` stays
+# pinned at the user's --since for every call; `before` is advanced to the
+# createdAt of the oldest meeting on the previous page to request older records.
+# Stop when `pageInfo.hasNextPage` is false or no progress can be made.
 #
 # IMPORTANT: Both `after` and `before` accept DateTime scalars that MUST include
 # milliseconds: YYYY-MM-DDTHH:MM:SS.SSSZ (e.g. 2026-05-01T00:00:00.000Z).
