@@ -17,6 +17,7 @@ Two GraphQL calls per response that has comments (typical case):
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 
 from standup_aggregator.client import ParabolClient
@@ -24,6 +25,51 @@ from standup_aggregator.models import MeetingDoc, Reaction, Reply, Response
 from standup_aggregator.queries import MEETING_FULL_QUERY, THREAD_QUERY
 
 THREAD_PAGE_SIZE = 50
+
+
+def _extract_plaintext(content: str | None) -> str:
+    """Extract human-readable text from Parabol's rich-text Comment.content.
+
+    Comment.content is a stringified rich-text document (TipTap / Prosemirror
+    in current Parabol; Draft.js in older versions). Both formats nest text
+    inside a tree where leaf text nodes have a 'text' key. We do a depth-first
+    walk and join all text strings we find with appropriate whitespace.
+
+    Falls back to the raw value if it isn't valid JSON — defensive against
+    schema drift or any plain-string fields that sneak through.
+    """
+    if not content:
+        return ""
+    try:
+        doc = json.loads(content)
+    except (TypeError, ValueError):
+        return content  # already plain text or unparseable — return as-is
+
+    chunks: list[str] = []
+
+    def walk(node: object) -> None:
+        if isinstance(node, dict):
+            # TipTap/Prosemirror leaves: {"type": "text", "text": "hi"}
+            # Draft.js blocks:           {"text": "hi", "type": "unstyled", ...}
+            text = node.get("text")
+            if isinstance(text, str):
+                chunks.append(text)
+            # Walk all values; both formats nest under various keys
+            # (content, blocks, marks, ...). Visiting all values is safe
+            # because we only collect strings that live under a "text" key.
+            for key, value in node.items():
+                if key == "text":
+                    continue  # already handled
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+        # primitives (numbers, bools, plain strings outside "text" keys) are ignored
+
+    walk(doc)
+    # Join with spaces; this handles both inline text-runs and separate
+    # paragraph blocks reasonably for terminal/markdown display.
+    return " ".join(chunk for chunk in chunks if chunk).strip()
 
 
 def _parse_dt(s: str | None) -> datetime | None:
@@ -44,7 +90,7 @@ def _build_replies(comment_nodes: list[dict]) -> list[Reply]:
             continue
         reply = Reply(
             id=node["id"],
-            plaintext=node.get("content") or "",  # Comment.content, not .plaintextContent
+            plaintext=_extract_plaintext(node.get("content")),
             created_at=created,
             author_name=author,
             parent_id=node.get("threadParentId"),
