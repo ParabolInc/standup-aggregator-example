@@ -113,7 +113,7 @@ This is the demonstrator part. If you came here to learn how to call Parabol fro
 
 **Errors.** Parabol generally returns HTTP 200 even for failures, with an `errors` array in the JSON body. We classify into:
 - `AuthError` — HTTP 401/403, or messages mentioning "scope"/"unauthorized".
-- `NetworkError` — non-2xx HTTP, retried twice on 5xx with exponential backoff.
+- `NetworkError` — non-2xx HTTP, retried twice on 5xx with a 1s/2s backoff.
 - `GraphQLError` — anything else returned in `errors`.
 
 **Pagination.**
@@ -124,7 +124,7 @@ This is the demonstrator part. If you came here to learn how to call Parabol fro
 - Parabol's `DateTime` scalar **requires millisecond precision** (`.000Z`). Strings like `2026-05-01T00:00:00Z` are rejected with HTTP 400. See `_to_parabol_dt` in `discover.py`.
 - Parabol enforces a **GraphQL query depth limit of 12**. Hydrating a meeting with its threads inline exceeds that, so we split into `MEETING_FULL_QUERY` (just discussion ids) and per-discussion `THREAD_QUERY` calls.
 - `TeamPromptResponse` has **no** `discussion` field. Discussion lives on `TeamPromptResponseStage`. We walk `meeting.phases[].stages[]` and join by `response.id`.
-- `Comment` has no `plaintextContent` field — only `content`, which is a stringified rich-text JSON document (TipTap / Prosemirror). The `_extract_plaintext` helper in `fetch.py` walks the tree and collects text leaves.
+- `Comment` has no `plaintextContent` field — only `content`, which is a stringified rich-text JSON document (TipTap / Prosemirror). The `_extract_plaintext` helper in `fetch.py` walks the tree and collects text leaves. Note the asymmetry: `TeamPromptResponse` exposes `plaintextContent` directly, so we don't need an extractor for response bodies — only for comments and replies.
 - Custom emoji reactions (reactjis) carry an `<orgId>:<shortcode>` id. Strip the prefix for rendering.
 
 **The queries we use** are in [`src/standup_aggregator/queries.py`](src/standup_aggregator/queries.py). Open that file. Every query has a docstring explaining its purpose, scopes, and return shape — they're meant to be read.
