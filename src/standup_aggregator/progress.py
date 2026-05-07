@@ -25,6 +25,7 @@ def hydration_progress(total: int, console: Console):
     if not console.is_terminal:
         # Plain non-TTY mode: yield a no-op object.
         class _Noop:
+            def label(self, *a, **kw): ...
             def advance(self, *a, **kw): ...
         yield _Noop()
         return
@@ -41,9 +42,10 @@ def hydration_progress(total: int, console: Console):
         task_id = progress.add_task("Hydrating meetings", total=total)
 
         class _Tracker:
-            def advance(self, label: str | None = None) -> None:
-                if label:
-                    progress.update(task_id, description=label)
+            def label(self, text: str) -> None:
+                progress.update(task_id, description=text)
+
+            def advance(self) -> None:
                 progress.advance(task_id)
 
         yield _Tracker()

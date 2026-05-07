@@ -275,8 +275,9 @@ def run(
             docs = []
             with hydration_progress(len(summaries), console) as tracker:
                 for s in summaries:
-                    tracker.advance(f"{s.team_name} — {s.name}")
+                    tracker.label(f"{s.team_name} — {s.name}")
                     docs.append(fetch_meeting(client, s.id))
+                    tracker.advance()
     except ParabolApiError as exc:
         console.print(f"[red bold]API error:[/] {exc}")
         raise typer.Exit(code=1)
