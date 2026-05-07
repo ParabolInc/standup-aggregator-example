@@ -12,6 +12,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.tree import Tree
 
 from standup_aggregator import __version__
 from standup_aggregator.client import ParabolApiError, ParabolClient
@@ -21,6 +22,8 @@ from standup_aggregator.discover import (
     filter_teams,
     list_visible_teams,
 )
+from standup_aggregator.fetch import fetch_meeting
+from standup_aggregator.models import MeetingDoc, Reply
 from standup_aggregator.queries import VIEWER_QUERY
 from standup_aggregator.timeparse import TimeParseError, parse_window
 
@@ -153,3 +156,59 @@ def list_cmd(
             m.id,
         )
     console.print(table)
+
+
+def _render_replies_tree(replies: list[Reply], parent: Tree) -> None:
+    for r in replies:
+        node = parent.add(f"[bold]{r.author_name}[/]: {r.plaintext or '[dim](empty)[/]'}")
+        if r.children:
+            _render_replies_tree(r.children, node)
+
+
+def _print_meeting(doc: MeetingDoc) -> None:
+    header = (
+        f"[bold cyan]{doc.name}[/]  ·  [magenta]{doc.team_name}[/]\n"
+        f"[dim]{doc.created_at.strftime('%Y-%m-%d %H:%M UTC')}[/]\n\n"
+        f"[italic]Prompt:[/] {doc.prompt or '(no prompt)'}\n"
+        f"[dim]{doc.response_count} response(s)[/]"
+    )
+    console.print(Panel(header, border_style="cyan"))
+
+    for resp in doc.responses:
+        rxn = (
+            "  ".join(f"{r.emoji_id}×{r.count}" for r in resp.reactions)
+            or "[dim]no reactions[/]"
+        )
+        body = (
+            f"[bold]{resp.author_name}[/]  [dim]{resp.created_at.strftime('%Y-%m-%d %H:%M')}[/]\n\n"
+            f"{resp.plaintext or '[dim](empty)[/]'}\n\n"
+            f"{rxn}"
+        )
+        console.print(Panel(body, border_style="green"))
+
+        if resp.replies:
+            tree = Tree("[bold]Replies[/]")
+            _render_replies_tree(resp.replies, tree)
+            console.print(tree)
+
+
+@app.command()
+def inspect(meeting_id: str = typer.Argument(..., help="The meeting id to hydrate.")) -> None:
+    """Hydrate one meeting and pretty-print it to the terminal."""
+    try:
+        cfg = load_config()
+    except ConfigError as exc:
+        console.print(f"[red bold]Config error:[/] {exc}")
+        raise typer.Exit(code=1)
+
+    try:
+        with ParabolClient(cfg) as client:
+            doc = fetch_meeting(client, meeting_id)
+    except ParabolApiError as exc:
+        console.print(f"[red bold]API error:[/] {exc}")
+        raise typer.Exit(code=1)
+    except ValueError as exc:
+        console.print(f"[red bold]Not found:[/] {exc}")
+        raise typer.Exit(code=1)
+
+    _print_meeting(doc)

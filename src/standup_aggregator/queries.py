@@ -86,3 +86,102 @@ query TeamMeetings($first: Int!, $teamIds: [ID!]!, $after: DateTime, $before: Da
   }
 }
 """
+
+# Hydrate one TeamPromptMeeting with all its responses, reactions, and the
+# discussion id attached to each response (via the stage that owns the response).
+#
+# SCHEMA PATH (confirmed by introspection, 2026-05-07):
+#   Variant B — discussion is on TeamPromptResponseStage, NOT on TeamPromptResponse.
+#   Introspection of TeamPromptResponse showed fields: id, reactjis, userId, user,
+#   content, plaintextContent, createdAt, updatedAt, sortOrder — no discussion field.
+#   Introspection of TeamPromptResponseStage confirmed: discussion: Discussion! (NON_NULL).
+#
+# WHY THREADS ARE NOT INLINE:
+#   Parabol enforces a query depth limit of 12. Embedding thread edges inline inside
+#   phases → stages → discussion → thread → edges → node → createdByUser would exceed
+#   that limit (depth 14 with the outer viewer.meeting path). Threads are therefore
+#   fetched per-discussion with a separate THREAD_QUERY call after the meeting loads.
+#
+# NOTE: Comment.content is rich text (Parabol's internal draft-js format string).
+#   There is no Comment.plaintextContent field — the plan's template was wrong.
+#   We read Comment.content directly; the render layer displays it as-is.
+#
+# Required scopes: MEETINGS_READ.
+#
+# Returns:
+#   viewer.meeting.id / name / createdAt / endedAt / teamId / team / meetingPrompt /
+#   responseCount / responses[] (with user and reactjis) /
+#   phases[TeamPromptResponsesPhase].stages[TeamPromptResponseStage].response.id +
+#   discussion.id + discussion.commentCount
+MEETING_FULL_QUERY = """
+query MeetingFull($meetingId: ID!) {
+  viewer {
+    meeting(meetingId: $meetingId) {
+      ... on TeamPromptMeeting {
+        id
+        name
+        createdAt
+        endedAt
+        teamId
+        team { id name }
+        meetingPrompt
+        responseCount
+        responses {
+          id
+          userId
+          user { id preferredName email }
+          plaintextContent
+          createdAt
+          updatedAt
+          reactjis { id count users { id preferredName } }
+        }
+        phases {
+          phaseType
+          ... on TeamPromptResponsesPhase {
+            stages {
+              ... on TeamPromptResponseStage {
+                response { id }
+                discussion { id commentCount }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+# Continue paginating one discussion's thread.
+#
+# viewer.discussion(id: ID!) confirmed by introspection of User type:
+#   discussion: Discussion (nullable OBJECT), arg: id: ID! (NON_NULL).
+#
+# Required scope: COMMENTS_READ.
+#
+# Comment.content is Parabol's rich-text (draft-js) string. threadParentId
+# links replies to their parent comment. isActive filters deleted comments.
+THREAD_QUERY = """
+query DiscussionThread($discussionId: ID!, $first: Int!, $after: String) {
+  viewer {
+    discussion(id: $discussionId) {
+      id
+      thread(first: $first, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        edges {
+          node {
+            ... on Comment {
+              id
+              content
+              createdAt
+              createdByUser { id preferredName }
+              threadParentId
+              isActive
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
