@@ -25,7 +25,7 @@ uv sync
 ## Mint a Personal Access Token
 
 1. Sign in to Parabol.
-2. Go to **Profile → Personal Access Tokens** (`/me/profile/personal-access-tokens`).
+2. Go to **Profile → Personal Access Tokens** (`/me/profile`).
 3. Click **Create token**.
 4. Required scopes:
    - `MEETINGS_READ` — meetings, prompts, responses.
@@ -94,13 +94,13 @@ A run also prints a green-bordered "Run summary" table to the terminal when it f
 
 ```
             Run summary
-   ╭───────────────┬───────────╮
-   │ Teams scanned │     3     │
-   │ Meetings written │   12   │
-   │ Responses     │    87     │
-   │ Replies       │    14     │
-   │ Output        │ out/...   │
-   ╰───────────────┴───────────╯
+   ╭──────────────────┬───────────╮
+   │ Teams scanned    │     3     │
+   │ Meetings written │    12     │
+   │ Responses        │    87     │
+   │ Replies          │    14     │
+   │ Output           │ out/...   │
+   ╰──────────────────┴───────────╯
 ```
 
 ## How the API works
@@ -170,4 +170,4 @@ The test suite covers the pure helpers (config validation, time parsing, window 
 
 ## License
 
-MIT. (Or as designated by the repository owner.)
+MIT.
