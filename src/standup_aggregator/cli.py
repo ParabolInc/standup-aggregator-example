@@ -7,6 +7,7 @@ so each command body stays small and easy to read.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -24,8 +25,10 @@ from standup_aggregator.discover import (
     list_visible_teams,
 )
 from standup_aggregator.fetch import fetch_meeting
+from standup_aggregator.fs import make_run_dir, mint_run_id
 from standup_aggregator.models import MeetingDoc, Reply
 from standup_aggregator.queries import VIEWER_QUERY
+from standup_aggregator.render import render_index, render_meeting, render_meeting_filename
 from standup_aggregator.timeparse import TimeParseError, parse_window
 
 app = typer.Typer(
@@ -221,3 +224,67 @@ def inspect(meeting_id: str = typer.Argument(..., help="The meeting id to hydrat
         raise typer.Exit(code=1)
 
     _print_meeting(doc)
+
+
+@app.command()
+def run(
+    since: str | None = typer.Option(None, "--since", help="Window start."),
+    until: str | None = typer.Option(None, "--until", help="Window end."),
+    teams: list[str] = typer.Option([], "--team", help="Filter to teams (id or name). Repeatable."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Discover and render in memory; skip writes."),
+) -> None:
+    """Discover Stand-Ups in the window and render them to ./out/<run-id>/."""
+    try:
+        cfg = load_config()
+    except ConfigError as exc:
+        console.print(f"[red bold]Config error:[/] {exc}")
+        raise typer.Exit(code=1)
+
+    try:
+        since_dt, until_dt, desc = parse_window(since, until, now=datetime.now(tz=timezone.utc))
+    except TimeParseError as exc:
+        console.print(f"[red bold]Bad time range:[/] {exc}")
+        raise typer.Exit(code=1)
+
+    console.print(f"[dim]Window:[/] {desc}")
+
+    try:
+        with ParabolClient(cfg) as client:
+            visible_teams = list_visible_teams(client)
+            chosen_teams = filter_teams(visible_teams, teams)
+            if not chosen_teams:
+                console.print("[yellow]No teams matched the filter.[/]")
+                raise typer.Exit(code=0)
+
+            console.print(f"[dim]Teams:[/] {', '.join(t['name'] for t in chosen_teams)}")
+            summaries = discover_meetings(client, chosen_teams, since_dt, until_dt)
+            if not summaries:
+                console.print("[yellow]No Stand-Ups in this window.[/]")
+                raise typer.Exit(code=0)
+
+            console.print(f"[green]Found {len(summaries)} meeting(s). Hydrating...[/]")
+
+            docs = []
+            for s in summaries:
+                console.print(f"  • {s.team_name} — {s.name} ({s.id})")
+                docs.append(fetch_meeting(client, s.id))
+    except ParabolApiError as exc:
+        console.print(f"[red bold]API error:[/] {exc}")
+        raise typer.Exit(code=1)
+
+    run_id = mint_run_id(datetime.now(tz=timezone.utc))
+    if dry_run:
+        console.print(f"[cyan]--dry-run:[/] would have written {len(docs)} file(s) to out/{run_id}/")
+        for doc in docs:
+            console.print(f"  • {render_meeting_filename(doc)}")
+        return
+
+    out_dir = make_run_dir(run_id)
+    rendered: list[tuple] = []
+    for doc in docs:
+        filename = render_meeting_filename(doc)
+        (out_dir / filename).write_text(render_meeting(doc), encoding="utf-8")
+        rendered.append((doc, filename))
+
+    (out_dir / "INDEX.md").write_text(render_index(rendered), encoding="utf-8")
+    console.print(f"[green bold]Wrote {len(rendered)} file(s) + INDEX.md to[/] [cyan]{out_dir}/[/]")
