@@ -107,23 +107,20 @@ def discover_meetings(
     team_ids = list(team_id_to_name.keys())
 
     results: list[MeetingSummary] = []
-    cursor: str | None = None
-
+    # On the first page, `after` is the window start (since_str) so the server
+    # filters server-side. On subsequent pages, `after` is the DateTime cursor
+    # returned in pageInfo.endCursor. Using a single `cursor` variable that
+    # starts at since_str unifies both cases and removes the if/else each loop.
+    cursor: str = _to_parabol_dt(since)
     before_str = _to_parabol_dt(until)
-    since_str = _to_parabol_dt(since)
 
     while True:
         variables: dict = {
             "first": page_size,
             "teamIds": team_ids,
             "before": before_str,
+            "after": cursor,
         }
-        # `after` is optional (nullable DateTime) — only include when paginating
-        if cursor is not None:
-            variables["after"] = cursor
-        else:
-            # Use since as the initial `after` so the server filters server-side
-            variables["after"] = since_str
 
         data = client.query(TEAM_MEETINGS_QUERY, variables)
         page = (data.get("viewer") or {}).get("meetings") or {}
@@ -143,10 +140,14 @@ def discover_meetings(
                 if ended_raw
                 else None
             )
+            # Skip nodes without an id — avoids KeyError escaping the API block.
+            node_id = node.get("id")
+            if not node_id:
+                continue
             team_id = node.get("teamId", "")
             team_name = team_id_to_name.get(team_id, team_id)
             m = MeetingSummary(
-                id=node["id"],
+                id=node_id,
                 name=node.get("name", "Stand-Up"),
                 team_id=team_id,
                 team_name=team_name,

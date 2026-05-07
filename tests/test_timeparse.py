@@ -61,9 +61,10 @@ def test_parse_window_default_is_today_utc_to_now():
 
 def test_parse_window_uses_explicit_values():
     now = datetime(2026, 5, 7, 14, 30, tzinfo=UTC)
-    since, until, _ = parse_window("2026-05-01", "2026-05-07", now=now)
+    since, until, desc = parse_window("2026-05-01", "2026-05-07", now=now)
     assert since == datetime(2026, 5, 1, 0, 0, tzinfo=UTC)
     assert until == datetime(2026, 5, 7, 0, 0, tzinfo=UTC)
+    assert "→" in desc and "2026-05-01" in desc and "2026-05-07" in desc
 
 
 def test_parse_window_until_only_uses_default_since():
