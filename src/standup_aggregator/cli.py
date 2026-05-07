@@ -279,12 +279,15 @@ def run(
             console.print(f"  • {render_meeting_filename(doc)}")
         return
 
-    out_dir = make_run_dir(run_id)
-    rendered: list[tuple] = []
-    for doc in docs:
-        filename = render_meeting_filename(doc)
-        (out_dir / filename).write_text(render_meeting(doc), encoding="utf-8")
-        rendered.append((doc, filename))
-
-    (out_dir / "INDEX.md").write_text(render_index(rendered), encoding="utf-8")
+    try:
+        out_dir = make_run_dir(run_id)
+        rendered: list[tuple] = []
+        for doc in docs:
+            filename = render_meeting_filename(doc)
+            (out_dir / filename).write_text(render_meeting(doc), encoding="utf-8")
+            rendered.append((doc, filename))
+        (out_dir / "INDEX.md").write_text(render_index(rendered), encoding="utf-8")
+    except OSError as exc:
+        console.print(f"[red bold]File I/O error:[/] {exc}")
+        raise typer.Exit(code=1)
     console.print(f"[green bold]Wrote {len(rendered)} file(s) + INDEX.md to[/] [cyan]{out_dir}/[/]")

@@ -24,6 +24,18 @@ from standup_aggregator.fs import slugify
 from standup_aggregator.models import MeetingDoc, Reply, Response
 
 
+def _yaml_str(s: str) -> str:
+    """Quote a string for safe inclusion as a YAML scalar value.
+
+    Wraps in double quotes and escapes backslashes and embedded double
+    quotes. Only fields that come from user-controlled Parabol data
+    (meeting name, team name, prompt) need this. Stable identifiers
+    (UUIDs, the constant 'in progress' sentinel, URLs we generated) are
+    safe unquoted.
+    """
+    return '"' + s.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
 def render_meeting_filename(doc: MeetingDoc) -> str:
     team_slug = slugify(doc.team_name)
     date_slug = doc.created_at.strftime("%Y-%m-%d")
@@ -73,8 +85,8 @@ def _frontmatter(doc: MeetingDoc) -> str:
     return (
         "---\n"
         f"meeting_id: {doc.id}\n"
-        f"meeting_name: {doc.name}\n"
-        f"team: {doc.team_name}\n"
+        f"meeting_name: {_yaml_str(doc.name)}\n"
+        f"team: {_yaml_str(doc.team_name)}\n"
         f"team_id: {doc.team_id}\n"
         f"created_at: {doc.created_at.isoformat()}\n"
         f"ended_at: {ended}\n"
@@ -101,15 +113,21 @@ def _response_section(resp: Response) -> str:
         lines.append("")
     if resp.replies:
         lines.append("**Replies:**")
-        for reply in resp.replies:
+        for i, reply in enumerate(resp.replies):
             lines.extend(_render_reply(reply, depth=1))
+            if i < len(resp.replies) - 1:
+                lines.append(">")  # blank blockquote line between siblings
         lines.append("")
     return "\n".join(lines)
 
 
 def _format_reaction(reaction) -> str:
+    # Custom reactjis use a "<orgId>:<shortcode>" id; built-in ones don't have
+    # a colon. We display only the shortcode part for readability — the full
+    # id is meaningless to a markdown renderer.
+    emoji = reaction.emoji_id.split(":", 1)[-1]
     users = ", ".join(reaction.user_names)
-    return f"{reaction.emoji_id} ×{reaction.count} ({users})" if users else f"{reaction.emoji_id} ×{reaction.count}"
+    return f"{emoji} ×{reaction.count} ({users})" if users else f"{emoji} ×{reaction.count}"
 
 
 def _render_reply(reply: Reply, *, depth: int) -> list[str]:

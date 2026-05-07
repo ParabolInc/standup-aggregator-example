@@ -81,3 +81,75 @@ def test_render_index_groups_files_under_team_headings():
     assert "# Stand-Ups" in out
     assert "## Frontend Platform" in out
     assert "[Daily Standup — 2026-05-07](a.md)" in out
+
+
+def test_render_meeting_quotes_yaml_values_with_colons():
+    """Meeting/team names with ':' must remain valid YAML."""
+    doc = MeetingDoc(
+        id="m1",
+        name="Kickoff: Q2",
+        team_id="t1",
+        team_name="Eng: Platform",
+        created_at=datetime(2026, 5, 7, 13, 0, tzinfo=UTC),
+        ended_at=None,
+        prompt="ok",
+        response_count=0,
+        responses=[],
+    )
+    out = render_meeting(doc)
+    assert 'meeting_name: "Kickoff: Q2"' in out
+    assert 'team: "Eng: Platform"' in out
+
+
+def test_render_meeting_strips_emoji_namespace():
+    """Custom reactjis carry a numeric-namespace prefix; only the shortcode shows."""
+    resp = Response(
+        id="r1",
+        author_name="Bob",
+        author_email=None,
+        created_at=datetime(2026, 5, 7, 13, 0, tzinfo=UTC),
+        plaintext="hi",
+        reactions=[Reaction(emoji_id="56572:rocket", count=1, user_names=["Carol"])],
+        replies=[],
+    )
+    out = render_meeting(_doc([resp]))
+    assert "rocket ×1 (Carol)" in out
+    assert "56572:" not in out
+
+
+def test_render_meeting_separates_sibling_replies():
+    """Two top-level replies render with a blank blockquote between them."""
+    r_a = Reply(
+        id="c1",
+        plaintext="first",
+        created_at=datetime(2026, 5, 7, 13, 0, tzinfo=UTC),
+        author_name="Alice",
+        parent_id=None,
+        children=[],
+    )
+    r_b = Reply(
+        id="c2",
+        plaintext="second",
+        created_at=datetime(2026, 5, 7, 13, 1, tzinfo=UTC),
+        author_name="Bob",
+        parent_id=None,
+        children=[],
+    )
+    resp = Response(
+        id="r1",
+        author_name="X",
+        author_email=None,
+        created_at=datetime(2026, 5, 7, 13, 0, tzinfo=UTC),
+        plaintext="x",
+        reactions=[],
+        replies=[r_a, r_b],
+    )
+    out = render_meeting(_doc([resp]))
+    # Both replies present.
+    assert "**Alice** — first" in out
+    assert "**Bob** — second" in out
+    # A '>' blank-quote line appears between the two reply lines.
+    alice_idx = out.index("**Alice** — first")
+    bob_idx = out.index("**Bob** — second")
+    between = out[alice_idx:bob_idx]
+    assert "\n>\n" in between or "\n> \n" in between
